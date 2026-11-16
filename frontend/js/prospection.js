@@ -840,6 +840,7 @@ export function initProspection(ctx) {
       c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD9EAD3' } };
       c.border = { top: { style: 'thin' }, bottom: { style: 'medium' }, left: { style: 'thin' }, right: { style: 'thin' } };
     });
+    const pm = await api.proprietaires(r.com.code);
     const STATUT = 'Mot laissé / Vu / Pas intéressé';
     const num = (p) => `${String(p.section).replace(/^0+(?=.)/, '')} ${parseInt(p.numero, 10)}`;
     // rangé par zone du PLU, puis par note (meilleurs terrains d'abord dans chaque zone)
@@ -850,7 +851,8 @@ export function initProspection(ctx) {
       const lg = x.pot ? x.pot.real : x.estim ? x.estim.lg : null;
       const fais = lg === null ? `à étudier (${Math.round(x.occ.S).toLocaleString('fr-FR')} m²)` : `${x.pot ? '' : '≈ '}${lg} logements pour environ ${Math.round(x.occ.S).toLocaleString('fr-FR')} m²${x.groupe ? ` (remembrement de ${x.membres.length} parcelles)` : ''}`;
       // propriétaire : seulement s'il a été noté dans le suivi (champ « propriétaire » ou note « Propriétaire : … »)
-      const proprios = [...new Set(parts.map((p) => { const c = suivi.get(p.idu) || suivi.get(x.f.properties.idu); if (!c) return ''; if (c.proprietaire) return c.proprietaire; const m = String(c.note || '').match(/propri[ée]taire\s*:\s*([^\n;]+)/i); return m ? m[1].trim() : ''; }).filter(Boolean))];
+      // propriétaire : noté dans le suivi en priorité, sinon personne morale connue (fichier public de la DGFiP)
+      const proprios = [...new Set(parts.map((p) => { const c = suivi.get(p.idu) || suivi.get(x.f.properties.idu); if (c) { if (c.proprietaire) return c.proprietaire; const m = String(c.note || '').match(/propri[ée]taire\s*:\s*([^\n;]+)/i); if (m) return m[1].trim(); } return pm[p.idu] || ''; }).filter(Boolean))];
       const adr = x.groupe && x.adresses ? [...new Set(x.adresses.filter(Boolean).map((a) => a.label))].join(' / ') : (x.f.properties.adresse || x.adresse || '');
       const row = ws.addRow([parts.map(num).join(' + '), x.zone.properties.libelle, adr, fais, proprios.join(' / '), STATUT, '']);
       row.eachCell({ includeEmpty: true }, (c, k) => {

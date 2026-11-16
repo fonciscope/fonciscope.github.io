@@ -363,6 +363,8 @@ async function selectFeature(f, token = ++selToken, forceTab) {
   });
   risqP.then((r) => { if (token === selToken) { sel.risques = r; rerender(); } });
   api.adresseParcelle(f).then((a) => { if (token === selToken && a) { sel.adresse = a; const el = $('#ficheAdr'); if (el) el.innerHTML = adrHtml(); } });
+  // propriétaire personne morale (société, SCI, collectivité, bailleur) quand il est connu
+  api.proprietaires(insee).then((pm) => { if (token !== selToken) return; const ids = String(f.properties.idu).split('+').map((i) => (i.length === 14 ? i : insee + i.slice(-9))); const l = [...new Set(ids.map((i) => pm[i]).filter(Boolean))]; if (l.length) { sel.proprio = l.join(' / '); const el = $('#ficheAdr'); if (el) el.innerHTML = adrHtml(); } });
   api.communeByCode(insee).then((c) => { if (token === selToken) { sel.commune = c; if (tab === 'fiche' && ficheTab === 'commune') renderFiche(); } }).catch(() => {});
   if (tab === 'pot') renderPot(); else renderFiche();
   majPeek();
@@ -494,7 +496,8 @@ function adrHtml() {
   const a = sel && sel.adresse;
   if (!a) return '<span class="note">Adresse…</span>';
   const prec = { parcelle: 'adresse rattachée à la parcelle (Base Adresse Nationale)', dans: 'adresse située sur la parcelle', limite: 'adresse en limite de la parcelle', voisine: `pas d'adresse sur la parcelle : adresse voisine, à ${a.distance} m de sa limite` }[a.precision] || '';
-  return `${esc(a.label)} <span class="note">· ${esc(prec)}</span>`;
+  const pro = sel.proprio ? `<br>Propriétaire : <b>${esc(sel.proprio)}</b> <span class="note">· personne morale, fichier public de la DGFiP</span>` : '';
+  return `${esc(a.label)} <span class="note">· ${esc(prec)}</span>${pro}`;
 }
 
 function ficheSynthese(body) {

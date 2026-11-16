@@ -462,3 +462,12 @@ export function piecesPlu(partition) {
   }
   return piecesCache.get(partition);
 }
+
+// ---------- Propriétaires personnes morales (DGFiP, copie hebdomadaire data/proprios) ----------
+// Sociétés, SCI, collectivités, bailleurs : données publiques. Les particuliers n'y figurent pas.
+// Jamais transmis à l'IA.
+const proprioCache = new Map();
+export function proprietaires(insee) {
+  if (!proprioCache.has(insee)) proprioCache.set(insee, fetch(`data/proprios/${encodeURIComponent(insee)}.json`).then((r) => (r.ok ? r.json() : {})).catch(() => ({})));
+  return proprioCache.get(insee);
+}
