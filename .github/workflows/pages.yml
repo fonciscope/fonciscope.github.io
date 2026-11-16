@@ -21,6 +21,9 @@ jobs:
       - name: Ajout des règles lues par l'IA (branche regles)
         run: |
           if git fetch origin regles --depth=1; then git worktree add regles origin/regles && mkdir -p frontend/data/regles && (cd regles && find . -name "*.json" -exec cp --parents {} ../frontend/data/regles/ \;) || true; else echo "Pas encore de règles lues"; fi
+      - name: Ajout des propriétaires personnes morales (branche proprios)
+        run: |
+          if git fetch origin proprios --depth=1; then git worktree add proprios origin/proprios && mkdir -p frontend/data/proprios && cp proprios/*.json frontend/data/proprios/; else echo "Pas encore de propriétaires"; fi
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with: { path: frontend }
