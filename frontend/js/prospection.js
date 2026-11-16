@@ -204,6 +204,14 @@ export function initProspection(ctx) {
     } catch (e) { ctx.toast(e.message); }
   }
 
+  // Bouton « Voir aussi les terrains en OAP » : relance la prospection sans écarter les secteurs d'OAP (chaque terrain reste marqué « en secteur d'OAP »)
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('[data-pro-avec-oap]') || st.running) return;
+    st.crit.exclOap = false; st.crit.oapSeul = false;
+    store.saveProspectionCrit({ ...st.crit, commune: st.crit.commune });
+    run();
+  });
+
   function setStatus(html, pct) {
     const s = $('#proStatus');
     if (s) s.innerHTML = `<div class="status">${html}</div>${pct !== undefined ? `<div class="progress"><i style="width:${Math.round(pct)}%"></i></div>` : ''}`;
@@ -475,6 +483,7 @@ export function initProspection(ctx) {
       const estOap = (x) => { const p = x.properties || {}; return String(p.typepsc) === '18' || RE_OAP.test(`${p.libelle || ''} ${p.txt && p.txt !== 'nr' ? p.txt : ''}`); };
       const oapPolys = [...(presc || []), ...(infos || [])].filter((x) => x.geometry && /Polygon/.test(x.geometry.type) && estOap(x));
       const idxOap = oapPolys.length ? grille(oapPolys) : null;
+      compte.oapSecteurs = oapPolys.length; compte.oapHa = Math.round(oapPolys.reduce((a, x) => { try { return a + turf.area(x); } catch { return a; } }, 0) / 1e4);
       if ((c.exclOap || c.oapSeul) && presc === null) avertissements.push("Secteurs d'OAP non vérifiés : prescriptions du PLU indisponibles");
       /** Terrain en secteur d'OAP : au moins 20 m² ou 2 % du terrain dans un périmètre d'OAP, ou zone du PLU dite « soumise à OAP ». */
       const enOap = (f, S, zone) => {
@@ -790,7 +799,7 @@ export function initProspection(ctx) {
     const c = r.compte;
     const g = r.list.filter((h) => h.groupe).length, e = r.list.filter((h) => h.cat === 'entrepot').length;
     return `<b>${f0(r.list.length - e)} terrain(s) pour du logement</b>${g ? ` dont ${f0(g)} remembrement(s)` : ''}${e ? ` · <b>${f0(e)} entrepôt(s) et local(aux) d'activité</b>` : ''} sur ${f0(c.total)} parcelles en ${r.secs} s
-      <span class="note">· écartées : ${f0(c.surface)} surface, ${c.perimetre ? f0(c.perimetre) + ' hors zone affichée, ' : ''}${f0(c.zone)} zonage, ${f0(c.nature)} nature du foncier, ${f0(c.contraintes)} contraintes, ${f0(c.regles)} règles du PLU (programme impossible ou moins de logements que demandé)${c.sansRegles ? `, ${f0(c.sansRegles)} en attente de règles` : ''}${c.facade ? `, ${f0(c.facade)} regroupements sans pignon sur rue` : ''}${c.oap ? `, ${f0(c.oap)} en secteur d'OAP` : ''}${c.collectifs ? ` · dont ${f0(c.collectifs)} immeuble(s) collectif(s) existant(s)` : ''}${c.satCollectifs ? ` · ${f0(c.satCollectifs)} immeuble(s) repéré(s) par satellite et retiré(s)` : ''}${c.groupes ? ` · ${f0(c.groupes)} regroupements de parcelles étudiés` : ''}${c.score ? ', ' + f0(c.score) + ' note trop basse' : ''}</span>`;
+      <span class="note">· écartées : ${f0(c.surface)} surface, ${c.perimetre ? f0(c.perimetre) + ' hors zone affichée, ' : ''}${f0(c.zone)} zonage, ${f0(c.nature)} nature du foncier, ${f0(c.contraintes)} contraintes, ${f0(c.regles)} règles du PLU (programme impossible ou moins de logements que demandé)${c.sansRegles ? `, ${f0(c.sansRegles)} en attente de règles` : ''}${c.facade ? `, ${f0(c.facade)} regroupements sans pignon sur rue` : ''}${c.oap ? `, <b>${f0(c.oap)} en secteur d'OAP</b>` : ''}${c.collectifs ? ` · dont ${f0(c.collectifs)} immeuble(s) collectif(s) existant(s)` : ''}${c.satCollectifs ? ` · ${f0(c.satCollectifs)} immeuble(s) repéré(s) par satellite et retiré(s)` : ''}${c.groupes ? ` · ${f0(c.groupes)} regroupements de parcelles étudiés` : ''}${c.score ? ', ' + f0(c.score) + ' note trop basse' : ''}</span>${c.oap && c.oap >= Math.max(5, r.list.length) ? `<div class="note" style="margin-top:6px">Le PLU couvre une grande partie de la commune par ${c.oapSecteurs > 1 ? `${f0(c.oapSecteurs)} secteurs` : 'un secteur'} d'OAP (${f0(c.oapHa)} ha au total) : la case « Exclure les parcelles en secteur d'OAP » écarte donc la plupart des terrains. <button type="button" class="btn small" data-pro-avec-oap>Voir aussi les ${f0(c.oap)} terrains en OAP</button></div>` : ''}`;
   }
 
   // ---------- Résultats ----------
@@ -1010,7 +1019,7 @@ export function initProspection(ctx) {
       commune: r.com.nom, code_insee: r.com.code, document_urbanisme: r.partition, parcelles_etudiees: c.total,
       terrains_logement: log.length, dont_remembrements: log.filter((h) => h.groupe).length,
       entrepots_locaux_activite: r.list.length - log.length, en_attente_de_regles: r.attente.length, duree_s: r.secs,
-      ecartees: { surface: c.surface, zonage: c.zone, nature: c.nature, contraintes: c.contraintes, en_oap: c.oap || 0, regles_plu: c.regles, sans_facade: c.facade || 0, note: c.score },
+      ecartees: { surface: c.surface, zonage: c.zone, nature: c.nature, contraintes: c.contraintes, en_oap: c.oap || 0, secteurs_oap: c.oapSecteurs ? `${c.oapSecteurs} secteur(s), ${c.oapHa} ha` : null, regles_plu: c.regles, sans_facade: c.facade || 0, note: c.score },
       lecture_reglement_en_cours: !!r.lectureEnCours, avertissements: r.avertissements, meilleurs: log.slice(0, n).map((h, i) => terrainResume(h, i + 1)),
     };
   }
