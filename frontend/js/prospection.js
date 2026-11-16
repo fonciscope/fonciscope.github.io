@@ -639,7 +639,7 @@ export function initProspection(ctx) {
       ctx.onResults && ctx.onResults(true);
       renderResults();
       // adresses en arrière-plan : la liste est utilisable tout de suite, les adresses s'ajoutent au fil de l'eau
-      ajouterAdresses(st.results).catch(() => {});
+      st.results.adrP = ajouterAdresses(st.results).catch(() => {});
       // zones sans règles : lecture du règlement écrit par l'IA (clé Gemini enregistrée), puis nouveau classement
       // en arrière-plan : les résultats s'affichent tout de suite, puis sont reclassés quand les règles arrivent
       if (cleIA() && st.zonesMissing.length) { st.results.lectureEnCours = true; const r0 = st.results; lireZonesManquantes(r0, signal).catch(() => {}).finally(() => { r0.lectureEnCours = false; }); }
@@ -808,6 +808,17 @@ export function initProspection(ctx) {
   }));
   async function exportXlsx(r, liste) {
     const ExcelJS = await chargerExcel();
+    // adresses : on attend celles en cours de recherche, puis on cherche celles qui manquent encore
+    if (r.adrP) await r.adrP;
+    const sans = liste.filter((x) => !x.adresse && !x.f.properties.adresse);
+    if (sans.length) {
+      const feats = [], refs = [];
+      sans.forEach((x) => (x.groupe ? x.membres.map((m) => m.f) : [x.f]).forEach((f, j) => { feats.push(f); refs.push([x, j]); }));
+      const res = await api.adressesParcelles(feats).catch(() => []);
+      const par = new Map();
+      res.forEach((a, k) => { if (!a) return; const [x, j] = refs[k]; if (!par.has(x)) par.set(x, []); par.get(x)[j] = a; });
+      for (const [x, l] of par) { x.adresses = l; x.adresse = [...new Set(l.filter(Boolean).map((a) => a.rue))].join(' / '); x.f.properties.adresse = l.filter(Boolean).map((a) => a.label).join(' / '); }
+    }
     const suivi = new Map(store.crmList().map((x) => [x.idu, x]));
     const wb = new ExcelJS.Workbook();
     wb.creator = 'Fonciscope';
