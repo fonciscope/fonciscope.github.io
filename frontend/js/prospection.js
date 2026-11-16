@@ -10,6 +10,7 @@ import { voisinages, regroupements, fusion, sansDoublons, facadesSurRue } from '
 import * as permis from './permis.js';
 import { reglesGraphiquesParcelle, fusionRegles } from './regles.js';
 import * as lecture from './lecture.js';
+import * as satellite from './satellite.js';
 import { cleIA } from './assistant.js';
 
 const NATURES_DEFAUT = Object.keys(NATURES).filter((k) => NATURES[k].opp);
@@ -549,6 +550,7 @@ export function initProspection(ctx) {
           continue;
         }
         if (!natureOk(o)) { compte.nature++; if (o.cle === 'collectif' || o.cle === 'petit_collectif') compte.collectifs = (compte.collectifs || 0) + 1; continue; }
+        if (o.cle === 'maison' || o.cle === 'maison_grand') voisinCollectif(k.f, o, idx);
         evaluer({ f: k.f, zone: k.zone, occ: o, facade: facades.get(k.f.properties.idu) });
       }
 
@@ -644,7 +646,11 @@ export function initProspection(ctx) {
       st.results.adrP = ajouterAdresses(st.results).catch(() => {});
       // zones sans règles : lecture du règlement écrit par l'IA (clé Gemini enregistrée), puis nouveau classement
       // en arrière-plan : les résultats s'affichent tout de suite, puis sont reclassés quand les règles arrivent
-      if (cleIA() && st.zonesMissing.length) { st.results.lectureEnCours = true; const r0 = st.results; lireZonesManquantes(r0, signal).catch(() => {}).finally(() => { r0.lectureEnCours = false; }); }
+      // puis vérification des meilleurs terrains par photo aérienne
+      if (cleIA()) {
+        const r0 = st.results; r0.lectureEnCours = !!st.zonesMissing.length;
+        (st.zonesMissing.length ? lireZonesManquantes(r0, signal) : Promise.resolve()).catch(() => {}).finally(() => { r0.lectureEnCours = false; verifierSatellite(r0).catch(() => {}); });
+      }
     } catch (e) {
       st.erreur = e.name === 'AbortError' || signal.aborted ? 'Prospection arrêtée' : e.message;
       setStatus(`<p class="err">${esc(st.erreur)}</p>`);
@@ -653,6 +659,58 @@ export function initProspection(ctx) {
       const btn = $('#proForm button[type=submit]'); if (btn) btn.disabled = false; $('#proStop')?.remove();
       if (st.results) renderResults();
     }
+  }
+
+  /**
+   * Maison voisine d'immeubles collectifs (à moins de 50 m) : densification cohérente avec le quartier, terrain prioritaire.
+   * Immeuble = bâtiment résidentiel BD TOPO de 5 logements et plus, ou de 4 niveaux et plus, ou copropriété immatriculée.
+   */
+  function voisinCollectif(f, o, idx) {
+    const b = turf.bbox(f), d = 0.00065;
+    const proches = idx.bat.pres([b[0] - d, b[1] - d, b[2] + d, b[3] + d]).filter((x) => {
+      const p = x.properties;
+      if (!/r[ée]sidentiel/i.test(p.usage_1 || '')) return false;
+      if (!((+p.nombre_de_logements || 0) >= 5 || (+p.nombre_d_etages || 0) >= 4)) return false;
+      x.__c = x.__c || turf.pointOnFeature(x);
+      return !turf.booleanPointInPolygon(x.__c, f);
+    });
+    if (proches.length) {
+      const lg = proches.reduce((a, x) => a + (+x.properties.nombre_de_logements || 0), 0);
+      o.flags.push({ k: 'voisin_collectif', t: `Maison voisine de ${proches.length} immeuble(s) collectif(s)${lg ? ` (${lg} logements)` : ''} : densification dans la continuité du quartier` });
+    }
+  }
+
+  /**
+   * Vérification par photo aérienne des meilleurs terrains (Gemini) : les immeubles collectifs vus sur la photo sont retirés,
+   * les autres terrains reçoivent la mention de ce que l'IA a vu (maison individuelle, mitoyennes…).
+   */
+  async function verifierSatellite(r, n = 24) {
+    const deja = new Set(r.satVus || []);
+    const cibles = r.list.filter((h) => h.cat !== 'entrepot' && !h.satellite && !deja.has(h)).slice(0, n);
+    if (!cibles.length) return;
+    r.satEnCours = true;
+    const statut = () => { const s = document.querySelector('#proSatStatut'); return s; };
+    try {
+      await satellite.verifier(cibles, (t) => { const s = statut(); if (s) s.textContent = t; });
+    } catch (e) {
+      r.avertissements.push(`Vérification par photo aérienne interrompue : ${e.message}`);
+    } finally { r.satEnCours = false; }
+    r.satVus = [...deja, ...cibles];
+    let retires = 0;
+    for (const h of cibles) {
+      const v = h.satellite; if (!v) continue;
+      const lib = satellite.LIBELLES[v.type] || v.type;
+      h.occ.flags = h.occ.flags.filter((x) => x.k !== 'satellite');
+      h.occ.flags.push({ k: 'satellite', t: `Vu par satellite : ${lib}${v.constructions ? ` (${v.constructions})` : ''}${v.autour ? ` ; autour : ${v.autour}` : ''}` });
+      if (['maison_individuelle', 'maisons_mitoyennes'].includes(v.type) && h.occ.cle === 'autre') h.occ.label = `${v.type === 'maisons_mitoyennes' ? 'Maisons mitoyennes' : 'Maison individuelle'} (vue par satellite)`;
+      if (v.type === 'immeuble_collectif' && v.confiance >= 0.6) {
+        retires++;
+        r.list.splice(r.list.indexOf(h), 1);
+        (r.collectifsSat = r.collectifsSat || []).push(h);
+      }
+    }
+    if (retires) { r.compte.satCollectifs = (r.compte.satCollectifs || 0) + retires; r.avertissements.push(`${retires} terrain(s) retiré(s) : la photo aérienne montre un immeuble collectif existant.`); }
+    if (st.results === r) { setStatus(resume(r)); const cat = st.cat || 'logement'; ctx.setHits(cat === 'tout' ? r.list : cat === 'entrepot' ? r.list.filter((h) => h.cat === 'entrepot') : r.list.filter((h) => h.cat !== 'entrepot')); renderResults(); }
   }
 
   /** Lit dans le règlement les règles des zones qui en manquent (6 zones au plus, les plus fournies d'abord). */
@@ -708,7 +766,7 @@ export function initProspection(ctx) {
     const c = r.compte;
     const g = r.list.filter((h) => h.groupe).length, e = r.list.filter((h) => h.cat === 'entrepot').length;
     return `<b>${f0(r.list.length - e)} terrain(s) pour du logement</b>${g ? ` dont ${f0(g)} remembrement(s)` : ''}${e ? ` · <b>${f0(e)} entrepôt(s) et local(aux) d'activité</b>` : ''} sur ${f0(c.total)} parcelles en ${r.secs} s
-      <span class="note">· écartées : ${f0(c.surface)} surface, ${c.perimetre ? f0(c.perimetre) + ' hors zone affichée, ' : ''}${f0(c.zone)} zonage, ${f0(c.nature)} nature du foncier, ${f0(c.contraintes)} contraintes, ${f0(c.regles)} règles du PLU (programme impossible ou moins de logements que demandé)${c.sansRegles ? `, ${f0(c.sansRegles)} en attente de règles` : ''}${c.facade ? `, ${f0(c.facade)} regroupements sans pignon sur rue` : ''}${c.oap ? `, ${f0(c.oap)} en secteur d'OAP` : ''}${c.collectifs ? ` · dont ${f0(c.collectifs)} immeuble(s) collectif(s) existant(s)` : ''}${c.groupes ? ` · ${f0(c.groupes)} regroupements de parcelles étudiés` : ''}${c.score ? ', ' + f0(c.score) + ' note trop basse' : ''}</span>`;
+      <span class="note">· écartées : ${f0(c.surface)} surface, ${c.perimetre ? f0(c.perimetre) + ' hors zone affichée, ' : ''}${f0(c.zone)} zonage, ${f0(c.nature)} nature du foncier, ${f0(c.contraintes)} contraintes, ${f0(c.regles)} règles du PLU (programme impossible ou moins de logements que demandé)${c.sansRegles ? `, ${f0(c.sansRegles)} en attente de règles` : ''}${c.facade ? `, ${f0(c.facade)} regroupements sans pignon sur rue` : ''}${c.oap ? `, ${f0(c.oap)} en secteur d'OAP` : ''}${c.collectifs ? ` · dont ${f0(c.collectifs)} immeuble(s) collectif(s) existant(s)` : ''}${c.satCollectifs ? ` · ${f0(c.satCollectifs)} immeuble(s) repéré(s) par satellite et retiré(s)` : ''}${c.groupes ? ` · ${f0(c.groupes)} regroupements de parcelles étudiés` : ''}${c.score ? ', ' + f0(c.score) + ' note trop basse' : ''}</span>`;
   }
 
   // ---------- Résultats ----------
@@ -756,7 +814,7 @@ export function initProspection(ctx) {
       ${cat === 'entrepot' ? `<p class="note">Entrepôts, bâtiments industriels ou commerciaux situés en zone où le PLU autorise le logement : reconversion en logements possible, potentiel calculé.${r.list.some((h) => h.zoneAct) ? " Ceux des zones d'activités (logement interdit) sont signalés, Logts « — »." : ''}</p>` : ''}
       <div class="res-head">
         <div class="chips">${Object.entries(parNature).sort((a, b) => b[1] - a[1]).map(([k, n]) => `<button type="button" class="chip-btn ${st.filtreNature === k ? 'on' : ''}" data-nat="${k}">${esc(natLabel(k))} · ${n}</button>`).join('')}${st.filtreNature ? '<button type="button" class="chip-btn" data-nat="">Tout afficher</button>' : ''}</div>
-        ${r.list.length ? '<div class="actions"><button type="button" id="proXlsx">Fichier de prospection (Excel)</button><button type="button" class="ghost" id="proCsv">Exporter en CSV</button></div>' : ''}
+        ${r.list.length ? '<div class="actions"><button type="button" id="proXlsx">Fichier de prospection (Excel)</button>${cleIA() ? `<button type="button" class="ghost" id="proSat" ${r.satEnCours ? 'disabled' : ''}>${r.satEnCours ? 'Vérification par satellite…' : r.satVus ? 'Vérifier 24 terrains de plus par satellite' : 'Vérifier par satellite'}</button><span class="note" id="proSatStatut"></span>` : ''}<button type="button" class="ghost" id="proCsv">Exporter en CSV</button></div>' : ''}
       </div>
       ${r.list.length ? `<div class="tw"><table class="res-table">
         <thead><tr>${COLS.map((x) => `<th class="${x.n ? 'n' : ''}"><button type="button" class="sort" data-sort="${x.k}">${x.t}${st.tri.k === x.k ? (st.tri.dir > 0 ? ' ▲' : ' ▼') : ''}</button></th>`).join('')}</tr></thead>
@@ -781,6 +839,7 @@ export function initProspection(ctx) {
     res.querySelectorAll('[data-fiche]').forEach((b) => (b.onclick = (e) => { e.stopPropagation(); const h = liste[+b.dataset.fiche]; ctx.map.fitBounds(turf.bbox(h.f), { padding: 80, maxZoom: 18 }); ctx.selectFeature(h.f, undefined, 'fiche'); }));
     res.querySelectorAll('[data-carte]').forEach((b) => (b.onclick = (e) => { e.stopPropagation(); const h = liste[+b.dataset.carte]; ctx.map.fitBounds(turf.bbox(h.f), { padding: 60, maxZoom: 18 }); if (window.tfVoirCarte) window.tfVoirCarte(); }));
     const csv = $('#proCsv'); if (csv) csv.onclick = () => exportCsv(r);
+    const sat = $('#proSat'); if (sat) sat.onclick = () => { sat.disabled = true; sat.textContent = 'Vérification par satellite…'; verifierSatellite(r).catch((e) => ctx.toast(e.message)); };
     const xl = $('#proXlsx'); if (xl) xl.onclick = async () => { xl.disabled = true; xl.textContent = 'Préparation du fichier…'; try { await exportXlsx(r, cat === 'tout' ? r.list : base); } catch (e) { ctx.toast(`Fichier Excel impossible : ${e.message}`); } finally { xl.disabled = false; xl.textContent = 'Fichier de prospection (Excel)'; } };
   }
 

@@ -48,7 +48,10 @@ export function noter(o) {
   let vN = occ.poids ?? POIDS_NATURE[occ.cle] ?? 10;
   const recent = occ.flags.find((f) => f.k === 'recent');
   if (recent && !['terrain_nu', 'friche', 'parking'].includes(occ.cle)) vN = Math.max(0, vN - 8);
-  parts.push({ k: 'nature', label: 'Nature du foncier', v: vN, max: 25, why: `${occ.label}${recent ? ' ; ' + recent.t.toLowerCase() + ' (−8)' : ''}` });
+  // maison voisine d'immeubles collectifs : densification dans la continuité du quartier (+5)
+  const voisin = occ.flags.find((f) => f.k === 'voisin_collectif');
+  if (voisin) vN = Math.min(25, vN + 5);
+  parts.push({ k: 'nature', label: 'Nature du foncier', v: vN, max: 25, why: `${occ.label}${recent ? ' ; ' + recent.t.toLowerCase() + ' (−8)' : ''}${voisin ? ' ; voisine d\'immeubles collectifs (+5)' : ''}` });
 
   // 3. Sous-exploitation (15) : bâti existant rapporté au potentiel réglementaire, sinon emprise bâtie
   let vS, whyS;
