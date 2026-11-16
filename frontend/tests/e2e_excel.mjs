@@ -23,7 +23,8 @@ if (xl) {
   const wb = new xl.Workbook(); await wb.xlsx.readFile('prospection.xlsx');
   const ws = wb.worksheets[0];
   console.log('FEUILLE :', ws.name, ws.rowCount, 'lignes, filtre', JSON.stringify(ws.autoFilter));
-  for (let i = 1; i <= Math.min(10, ws.rowCount); i++) console.log('LIGNE', i, JSON.stringify(ws.getRow(i).values));
+  let avecProprio = 0; ws.eachRow((row, i) => { if (i > 2 && row.getCell(5).value) avecProprio++; }); console.log('LIGNES AVEC PROPRIO :', avecProprio); ws.eachRow((row, i) => { if (i > 2 && row.getCell(5).value) console.log('PROPRIO', JSON.stringify(row.values)); });
+  for (let i = 1; i <= Math.min(6, ws.rowCount); i++) console.log('LIGNE', i, JSON.stringify(ws.getRow(i).values));
 }
 console.log('ERREURS JS :', erreurs.length ? erreurs.join('\n') : 'aucune');
 await b.close();
