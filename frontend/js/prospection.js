@@ -754,7 +754,7 @@ export function initProspection(ctx) {
       ${cat === 'entrepot' ? `<p class="note">Entrepôts, bâtiments industriels ou commerciaux situés en zone où le PLU autorise le logement : reconversion en logements possible, potentiel calculé.${r.list.some((h) => h.zoneAct) ? " Ceux des zones d'activités (logement interdit) sont signalés, Logts « — »." : ''}</p>` : ''}
       <div class="res-head">
         <div class="chips">${Object.entries(parNature).sort((a, b) => b[1] - a[1]).map(([k, n]) => `<button type="button" class="chip-btn ${st.filtreNature === k ? 'on' : ''}" data-nat="${k}">${esc(natLabel(k))} · ${n}</button>`).join('')}${st.filtreNature ? '<button type="button" class="chip-btn" data-nat="">Tout afficher</button>' : ''}</div>
-        ${r.list.length ? '<button type="button" class="ghost" id="proCsv">Exporter en CSV</button>' : ''}
+        ${r.list.length ? '<div class="actions"><button type="button" id="proXlsx">Fichier de prospection (Excel)</button><button type="button" class="ghost" id="proCsv">Exporter en CSV</button></div>' : ''}
       </div>
       ${r.list.length ? `<div class="tw"><table class="res-table">
         <thead><tr>${COLS.map((x) => `<th class="${x.n ? 'n' : ''}"><button type="button" class="sort" data-sort="${x.k}">${x.t}${st.tri.k === x.k ? (st.tri.dir > 0 ? ' ▲' : ' ▼') : ''}</button></th>`).join('')}</tr></thead>
@@ -779,6 +779,7 @@ export function initProspection(ctx) {
     res.querySelectorAll('[data-fiche]').forEach((b) => (b.onclick = (e) => { e.stopPropagation(); const h = liste[+b.dataset.fiche]; ctx.map.fitBounds(turf.bbox(h.f), { padding: 80, maxZoom: 18 }); ctx.selectFeature(h.f, undefined, 'fiche'); }));
     res.querySelectorAll('[data-carte]').forEach((b) => (b.onclick = (e) => { e.stopPropagation(); const h = liste[+b.dataset.carte]; ctx.map.fitBounds(turf.bbox(h.f), { padding: 60, maxZoom: 18 }); if (window.tfVoirCarte) window.tfVoirCarte(); }));
     const csv = $('#proCsv'); if (csv) csv.onclick = () => exportCsv(r);
+    const xl = $('#proXlsx'); if (xl) xl.onclick = async () => { xl.disabled = true; xl.textContent = 'Préparation du fichier…'; try { await exportXlsx(r, cat === 'tout' ? r.list : base); } catch (e) { ctx.toast(`Fichier Excel impossible : ${e.message}`); } finally { xl.disabled = false; xl.textContent = 'Fichier de prospection (Excel)'; } };
   }
 
   function ligne(h, i) {
@@ -791,6 +792,73 @@ export function initProspection(ctx) {
       <p class="note">${esc(h.occ.raisons.join(' ; '))}${h.occ.flags.length ? ' · ' + h.occ.flags.map((x) => esc(x.t)).join(' · ') : ''}${h.facade !== undefined ? ` · façade sur rue ${f0(h.facade)} m` : ''}${h.oap ? ' · en secteur d\'OAP' : ''}${h.aConfirmer ? (h.estim ? ` · <b>≈ ${h.estim.lg} logements estimés</b> (densité médiane de ${h.estim.dens} logts/ha sur ${h.estim.n} opérations collectives autorisées, ${esc(h.estim.base)}) : à confirmer avec le règlement` : ' · potentiel à confirmer (règles de zone manquantes)') : ''}${h.graph ? ' · plan graphique : ' + Object.values(h.graph.sources).map(esc).join(', ') : ''}</p>
       <div class="actions"><button type="button" data-fiche="${i}">Ouvrir la fiche</button><button type="button" class="ghost" data-carte="${i}">Voir sur la carte</button></div></td></tr>` : '';
     return `<tr data-i="${i}" class="${open ? 'open' : ''}">${cells}</tr>${detail}`;
+  }
+
+  /**
+   * Fichier de prospection au format de l'équipe : titre = commune, puis N° parcelle, zone, adresse,
+   * faisabilité, nom du propriétaire (pré-rempli s'il est connu dans le suivi), statut à choisir, commentaires vides.
+   */
+  let excelP = null;
+  const chargerExcel = () => (excelP ||= new Promise((ok, ko) => {
+    if (window.ExcelJS) return ok(window.ExcelJS);
+    const sc = document.createElement('script');
+    sc.src = 'https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js';
+    sc.onload = () => ok(window.ExcelJS); sc.onerror = () => { excelP = null; ko(new Error('module Excel indisponible (cdnjs)')); };
+    document.head.appendChild(sc);
+  }));
+  async function exportXlsx(r, liste) {
+    const ExcelJS = await chargerExcel();
+    const suivi = new Map(store.crmList().map((x) => [x.idu, x]));
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'Fonciscope';
+    const ws = wb.addWorksheet(r.com.nom.slice(0, 31), { views: [{ state: 'frozen', ySplit: 2 }] });
+    ws.columns = [{ width: 22 }, { width: 16 }, { width: 34 }, { width: 36 }, { width: 34 }, { width: 34 }, { width: 70 }];
+    ws.mergeCells('A1:G1');
+    const t = ws.getCell('A1');
+    t.value = r.com.nom.toLowerCase();
+    t.font = { name: 'Aptos Narrow', size: 16, bold: true, color: { argb: 'FF1F4E3D' } };
+    t.alignment = { horizontal: 'center', vertical: 'middle' };
+    ws.getRow(1).height = 21.6;
+    const entetes = ['N° Parcelle ', 'Zone', 'Adresse', 'faisabilité', 'Nom proprio', 'Statut', 'Commentaires'];
+    const h = ws.getRow(2);
+    entetes.forEach((x, k) => {
+      const c = h.getCell(k + 1);
+      c.value = x;
+      c.font = { name: 'Aptos Narrow', size: 11, bold: true };
+      c.alignment = { horizontal: 'center', vertical: 'middle' };
+      c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD9EAD3' } };
+      c.border = { top: { style: 'thin' }, bottom: { style: 'medium' }, left: { style: 'thin' }, right: { style: 'thin' } };
+    });
+    const STATUT = 'Mot laissé / Vu / Pas intéressé';
+    const num = (p) => `${String(p.section).replace(/^0+(?=.)/, '')} ${parseInt(p.numero, 10)}`;
+    // rangé par zone du PLU, puis par note (meilleurs terrains d'abord dans chaque zone)
+    const zl = (x) => x.zone.properties.libelle || '';
+    liste = liste.slice().sort((a, b) => zl(a).localeCompare(zl(b), 'fr', { numeric: true }) || b.s.tot - a.s.tot);
+    liste.forEach((x, i) => {
+      const parts = x.groupe ? x.membres.map((m) => m.f.properties) : [x.f.properties];
+      const lg = x.pot ? x.pot.real : x.estim ? x.estim.lg : null;
+      const fais = lg === null ? `à étudier (${Math.round(x.occ.S).toLocaleString('fr-FR')} m²)` : `${x.pot ? '' : '≈ '}${lg} logements pour environ ${Math.round(x.occ.S).toLocaleString('fr-FR')} m²${x.groupe ? ` (remembrement de ${x.membres.length} parcelles)` : ''}`;
+      // propriétaire : seulement s'il a été noté dans le suivi (champ « propriétaire » ou note « Propriétaire : … »)
+      const proprios = [...new Set(parts.map((p) => { const c = suivi.get(p.idu) || suivi.get(x.f.properties.idu); if (!c) return ''; if (c.proprietaire) return c.proprietaire; const m = String(c.note || '').match(/propri[ée]taire\s*:\s*([^\n;]+)/i); return m ? m[1].trim() : ''; }).filter(Boolean))];
+      const adr = x.groupe && x.adresses ? [...new Set(x.adresses.filter(Boolean).map((a) => a.label))].join(' / ') : (x.f.properties.adresse || x.adresse || '');
+      const row = ws.addRow([parts.map(num).join(' + '), x.zone.properties.libelle, adr, fais, proprios.join(' / '), STATUT, '']);
+      row.eachCell({ includeEmpty: true }, (c, k) => {
+        c.font = { name: 'Aptos Narrow', size: 11 };
+        c.alignment = { vertical: 'middle', wrapText: k === 3 || k === 4 || k === 7 };
+        c.border = { bottom: { style: 'hair', color: { argb: 'FFBFBFBF' } } };
+      });
+      row.getCell(6).dataValidation = { type: 'list', allowBlank: true, formulae: ['"Mot laissé / Vu / Pas intéressé,Mot laissé,Vu,Pas intéressé,Intéressé,À relancer"'] };
+    });
+    // filtres et tri dans Excel sur chaque colonne (zone, statut…)
+    if (liste.length) ws.autoFilter = { from: { row: 2, column: 1 }, to: { row: liste.length + 2, column: 7 } };
+    const buf = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `prospection-${r.com.nom.toLowerCase().replace(/[^a-z0-9àâçéèêëîïôûùüÿ-]+/gi, '-')}.xlsx`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    ctx.toast(`Fichier Excel prêt : ${liste.length} terrain(s)`);
   }
 
   function exportCsv(r) {

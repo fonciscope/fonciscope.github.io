@@ -65,7 +65,7 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 20 }
       - name: Navigateur
-        run: npm i playwright@1.48.2 --no-audit --no-fund >/dev/null && npx playwright install --with-deps ${{ inputs.navigateur || 'chromium' }} >/dev/null
+        run: npm i playwright@1.48.2 exceljs@4.4.0 --no-audit --no-fund >/dev/null && npx playwright install --with-deps ${{ inputs.navigateur || 'chromium' }} >/dev/null
       - name: Liens des pièces du PLU
         continue-on-error: true
         run: cp frontend/tests/check_gpu.mjs . && node check_gpu.mjs
