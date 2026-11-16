@@ -19,6 +19,9 @@ jobs:
       - run: pip install requests
       - name: Propriétaires personnes morales (DGFiP)
         run: python -u tools/build_proprios.py --config data-config.json --out out
+      - name: Copropriétés immatriculées (registre national, ANAH)
+        continue-on-error: true
+        run: python -u tools/build_copros.py --config data-config.json --out out/copros
       - name: Publication sur la branche proprios
         run: |
           cd out

@@ -461,7 +461,9 @@ export function initProspection(ctx) {
       const [presc, fr, infos] = await Promise.all([prescP, frichesP, infoP]);
       if (fr === null) avertissements.push('Cartofriches indisponible : les friches ne sont pas repérées');
 
-      const idx = { bat: grille(occ.batiments), park: grille(occ.parkings), eq: grille(occ.equipements) };
+      // propriétaires personnes morales (bailleurs sociaux) et copropriétés immatriculées : immeubles collectifs existants
+      const [pmCom, coproCom] = await Promise.all([api.proprietaires(com.code), api.copros(com.code)]);
+      const idx = { bat: grille(occ.batiments), park: grille(occ.parkings), eq: grille(occ.equipements), pm: pmCom, copro: coproCom };
       const comBbox = turf.bbox(turf.featureCollection([...cand, ...pool].map((k) => k.f)));
       const idxPresc = presc ? grille(presc.filter((p) => p.geometry && (() => { const b = turf.bbox(p); return b[0] <= comBbox[2] && b[2] >= comBbox[0] && b[1] <= comBbox[3] && b[3] >= comBbox[1]; })())) : null;
       // Secteurs d'OAP : prescriptions de type 18 ou nommées OAP, informations nommées OAP
@@ -546,7 +548,7 @@ export function initProspection(ctx) {
           evaluer({ f: k.f, zone: k.zone, occ: o, cat: 'entrepot', zoneAct: true, facade: facades.get(k.f.properties.idu) });
           continue;
         }
-        if (!natureOk(o)) { compte.nature++; continue; }
+        if (!natureOk(o)) { compte.nature++; if (o.cle === 'collectif' || o.cle === 'petit_collectif') compte.collectifs = (compte.collectifs || 0) + 1; continue; }
         evaluer({ f: k.f, zone: k.zone, occ: o, facade: facades.get(k.f.properties.idu) });
       }
 
@@ -706,7 +708,7 @@ export function initProspection(ctx) {
     const c = r.compte;
     const g = r.list.filter((h) => h.groupe).length, e = r.list.filter((h) => h.cat === 'entrepot').length;
     return `<b>${f0(r.list.length - e)} terrain(s) pour du logement</b>${g ? ` dont ${f0(g)} remembrement(s)` : ''}${e ? ` · <b>${f0(e)} entrepôt(s) et local(aux) d'activité</b>` : ''} sur ${f0(c.total)} parcelles en ${r.secs} s
-      <span class="note">· écartées : ${f0(c.surface)} surface, ${c.perimetre ? f0(c.perimetre) + ' hors zone affichée, ' : ''}${f0(c.zone)} zonage, ${f0(c.nature)} nature du foncier, ${f0(c.contraintes)} contraintes, ${f0(c.regles)} règles du PLU (programme impossible ou moins de logements que demandé)${c.sansRegles ? `, ${f0(c.sansRegles)} en attente de règles` : ''}${c.facade ? `, ${f0(c.facade)} regroupements sans pignon sur rue` : ''}${c.oap ? `, ${f0(c.oap)} en secteur d'OAP` : ''}${c.groupes ? ` · ${f0(c.groupes)} regroupements de parcelles étudiés` : ''}${c.score ? ', ' + f0(c.score) + ' note trop basse' : ''}</span>`;
+      <span class="note">· écartées : ${f0(c.surface)} surface, ${c.perimetre ? f0(c.perimetre) + ' hors zone affichée, ' : ''}${f0(c.zone)} zonage, ${f0(c.nature)} nature du foncier, ${f0(c.contraintes)} contraintes, ${f0(c.regles)} règles du PLU (programme impossible ou moins de logements que demandé)${c.sansRegles ? `, ${f0(c.sansRegles)} en attente de règles` : ''}${c.facade ? `, ${f0(c.facade)} regroupements sans pignon sur rue` : ''}${c.oap ? `, ${f0(c.oap)} en secteur d'OAP` : ''}${c.collectifs ? ` · dont ${f0(c.collectifs)} immeuble(s) collectif(s) existant(s)` : ''}${c.groupes ? ` · ${f0(c.groupes)} regroupements de parcelles étudiés` : ''}${c.score ? ', ' + f0(c.score) + ' note trop basse' : ''}</span>`;
   }
 
   // ---------- Résultats ----------

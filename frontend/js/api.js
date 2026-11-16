@@ -471,3 +471,9 @@ export function proprietaires(insee) {
   if (!proprioCache.has(insee)) proprioCache.set(insee, fetch(`data/proprios/${encodeURIComponent(insee)}.json`).then((r) => (r.ok ? r.json() : {})).catch(() => ({})));
   return proprioCache.get(insee);
 }
+// Copropriétés immatriculées (registre national des copropriétés, copie hebdomadaire data/copros) : { idu: { lots, nom } }
+const coproCache = new Map();
+export function copros(insee) {
+  if (!coproCache.has(insee)) coproCache.set(insee, fetch(`data/copros/${encodeURIComponent(insee)}.json`).then((r) => (r.ok ? r.json() : {})).catch(() => ({})));
+  return coproCache.get(insee);
+}

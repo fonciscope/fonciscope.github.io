@@ -27,7 +27,7 @@ const year = (d) => { const y = parseInt(String(d || '').slice(0, 4), 10); retur
 
 /** Statistiques du bâti d'une parcelle à partir des bâtiments qui s'y trouvent (avec leur surface au sol). */
 export function batiStats(items) {
-  const st = { n: 0, emprise: 0, sdp: 0, logements: 0, logInconnus: 0, etagesMax: 0, hMax: 0, anneeMax: null, annexes: 0, annexeEmprise: 0, residEmprise: 0, actEmprise: 0, legers: 0, legerEmprise: 0, liste: [] };
+  const st = { residMax: 0, residInconnu: false, n: 0, emprise: 0, sdp: 0, logements: 0, logInconnus: 0, etagesMax: 0, hMax: 0, anneeMax: null, annexes: 0, annexeEmprise: 0, residEmprise: 0, actEmprise: 0, legers: 0, legerEmprise: 0, liste: [] };
   for (const { p, aire } of items) {
     const usage = `${p.usage_1 || ''} ${p.usage_2 || ''}`;
     const etages = Math.max(1, +p.nombre_d_etages || 1);
@@ -44,7 +44,7 @@ export function batiStats(items) {
     if (y && (RESIDENTIEL.test(usage) || ACTIVITE.test(usage))) st.anneeMax = Math.max(st.anneeMax || 0, y);
     const annexe = /annexe/i.test(p.usage_1 || '') || (!RESIDENTIEL.test(usage) && !ACTIVITE.test(usage) && !(+p.nombre_de_logements) && aire < 45);
     if (annexe) { st.annexes++; st.annexeEmprise += aire; }
-    if (RESIDENTIEL.test(p.usage_1 || '')) st.residEmprise += aire;
+    if (RESIDENTIEL.test(p.usage_1 || '')) { st.residEmprise += aire; st.residMax = Math.max(st.residMax, aire); if (p.nombre_de_logements === null || p.nombre_de_logements === undefined) st.residInconnu = true; }
     if (ACTIVITE.test(p.usage_1 || '') || /industriel/i.test(p.nature || '')) st.actEmprise += aire;
   }
   return st;
@@ -65,6 +65,12 @@ export function classer(S, st, ctx = {}) {
   else if (st.emprise < 20 && (ctx.parkingPart || 0) < 0.3) { cle = 'terrain_nu'; raisons.push(st.legers ? `Aucun bâtiment en dur (${st.legers} construction(s) légère(s))` : 'Aucun bâtiment'); }
   else if ((ctx.parkingPart || 0) >= 0.3 && ces < 0.15) { cle = 'parking'; raisons.push(`Parking sur ${Math.round(ctx.parkingPart * 100)} % de la parcelle`); }
   else if (st.logements >= 5 || (st.residEmprise > 0 && st.etagesMax >= 4)) { cle = 'collectif'; raisons.push(`${st.logements || '?'} logements, ${st.etagesMax} étages`); }
+  // copropriété immatriculée (registre national des copropriétés) : immeuble collectif existant
+  else if (st.residEmprise > 0 && ctx.copro) { cle = 'collectif'; raisons.push(`Copropriété immatriculée${ctx.copro.lots ? ` (${ctx.copro.lots} lots d'habitation)` : ''}${ctx.copro.nom ? ' : ' + ctx.copro.nom : ''}`); }
+  // logements d'un bailleur social (fichier des personnes morales) : résidence existante
+  else if (st.residEmprise > 0 && ctx.bailleur && (st.logements >= 3 || st.residMax >= 150 || st.etagesMax >= 2)) { cle = 'collectif'; raisons.push(`Logements d'un bailleur social : ${ctx.bailleur}`); }
+  // nombre de logements inconnu dans la BD TOPO : gabarit d'immeuble (3 niveaux et plus, ou grande emprise au sol)
+  else if (st.residEmprise > 0 && st.logements < 3 && st.residInconnu && (st.etagesMax >= 3 || st.hMax >= 10 || st.residMax >= 300)) { cle = 'collectif'; raisons.push(`Immeuble probable : bâtiment résidentiel de ${st.etagesMax || '?'} niveau(x), ${Math.round(st.hMax || 0)} m de haut, ${Math.round(st.residMax)} m² au sol (nombre de logements non renseigné)`); }
   else if (st.actEmprise >= 0.5 * st.emprise) { cle = 'activite'; raisons.push(`Bâtiment d'activité (${Math.round(st.actEmprise)} m² au sol)`); }
   else if (st.annexes >= 3 && st.logements === 0 && st.annexeEmprise >= 0.6 * st.emprise) { cle = 'garages'; raisons.push(`${st.annexes} annexes ou boxes, aucun logement`); }
   else if (st.annexes >= 1 && st.logements === 0 && st.residEmprise === 0 && st.annexeEmprise >= 0.6 * st.emprise) { cle = 'garage'; raisons.push('Annexe sans logement'); }
@@ -137,6 +143,15 @@ export function equipementDe(parcelle, indexEq) {
   return null;
 }
 
+// Bailleurs sociaux (fichier des personnes morales) : offices publics, ESH, SA d'HLM, sociétés d'économie mixte de logement
+const BAILLEUR = /\b(HLM|OPH|OPAC|HABITAT|LOGEMENT|LOGEM\w*|LOGIS|FOYER|RESIDENCE[S]?|IMMOBILI[EÈ]RE 3F|VALLOGIS|TOURS HABITAT|VAL TOURAINE|LOIRET|ESSONNE HABITAT|ICF|CDC HABITAT|BATIGERE|EMMAUS|ADOMA)\b/i;
+const NON_BAILLEUR = /\bCOMMUNE|DEPARTEMENT|REGION|ETAT\b|SNCF|SCI\b/i;
+function bailleurDe(nom) {
+  if (!nom) return null;
+  return nom.split(' / ').find((n) => BAILLEUR.test(n) && !NON_BAILLEUR.test(n) && /OPH|EPIC|SA |SA\)|SAS|ESH|SEM|COOP|HLM|HABITAT|LOGEMENT/i.test(n)) || null;
+}
+export { bailleurDe };
+
 /** Analyse complète d'une parcelle à partir des index déjà chargés. */
 export function analyser(parcelle, idx, frichesParIdu) {
   const S = +parcelle.properties.contenance || turf.area(parcelle);
@@ -146,6 +161,8 @@ export function analyser(parcelle, idx, frichesParIdu) {
     parkingPart: idx.park ? partParking(parcelle, idx.park, S) : 0,
     equipement: idx.eq ? equipementDe(parcelle, idx.eq) : null,
     friche: frichesParIdu ? frichesParIdu.get(parcelle.properties.idu) || null : null,
+    copro: idx.copro ? idx.copro[parcelle.properties.idu] || null : null,
+    bailleur: idx.pm ? bailleurDe(idx.pm[parcelle.properties.idu]) : null,
   };
   return { S, stats, ctx, ...classer(S, stats, ctx) };
 }
