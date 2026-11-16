@@ -4,14 +4,15 @@ const b = await chromium.launch(); const page = await b.newPage({ viewport: { wi
 page.on('pageerror', (e) => console.log('PAGEERROR', String(e)));
 await page.goto('https://fonciscope.github.io/#13/48.57/2.17', { waitUntil: 'load', timeout: 60000 });
 await page.waitForTimeout(3000);
+await page.click('#tab-pro'); await page.waitForTimeout(800);
 const avant = await page.evaluate(async () => {
   const pro = window.tfDebug().pro;
   const res = await pro.lancer({ commune: 'Breuillet', zones: ['UC'], exclure_oap: true });
   return { terrains: res.terrains_logement, ecartees: res.ecartees };
 });
 console.log('AVANT ' + JSON.stringify(avant));
-await page.click('[data-tab="prospection"], button:has-text("Prospection")').catch(() => {});
-await page.waitForTimeout(800);
+await page.waitForTimeout(2000);
+console.log('STATUT ' + (await page.locator('#proStatus').innerText().catch((e) => 'absent ' + e.message)).slice(0, 600));
 const bouton = page.locator('[data-pro-avec-oap]');
 console.log('BOUTON ' + (await bouton.count()) + ' ' + (await bouton.first().textContent().catch(() => '')));
 await bouton.first().click();
