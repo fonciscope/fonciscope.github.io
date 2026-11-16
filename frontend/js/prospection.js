@@ -430,7 +430,9 @@ export function initProspection(ctx) {
         if (!f.geometry) continue;
         const S = +f.properties.contenance || 0;
         const okSeule = seule && S >= (c.smin || 0) && !(c.smax && S > c.smax);
-        const okPool = remb && S >= 150 && S < sRemb;
+        // remembrement : petites parcelles, et aussi les parcelles plus grandes (jusqu'à 3 fois la surface visée) pour
+        // qu'une parcelle de façade sur rue puisse être réunie avec les parcelles de fond qui la touchent
+        const okPool = remb && S >= 150 && S < 3 * sRemb;
         if (!okSeule && !okPool) { compte.surface++; continue; }
         const pt = turf.pointOnFeature(f), [x, y] = pt.geometry.coordinates;
         if (bounds && !bounds.contains([x, y])) { compte.perimetre++; continue; }

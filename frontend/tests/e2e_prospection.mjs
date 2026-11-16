@@ -3,6 +3,7 @@ import * as pw from 'playwright';
 const { devices } = pw;
 const chromium = pw[process.env.NAVIGATEUR || 'chromium']; // chromium (Chrome, Edge), webkit (Safari sur Mac et iPhone), firefox
 const URL = process.env.SITE || 'https://fonciscope.github.io/';
+setTimeout(() => { console.log('ARRÊT : test trop long (8 min)'); process.exit(2); }, 480000).unref();
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
 const erreurs = [];
