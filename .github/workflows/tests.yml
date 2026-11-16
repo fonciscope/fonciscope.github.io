@@ -67,13 +67,16 @@ jobs:
       - name: Navigateur
         run: npm i playwright@1.48.2 exceljs@4.4.0 --no-audit --no-fund >/dev/null && npx playwright install --with-deps ${{ inputs.navigateur || 'chromium' }} >/dev/null
       - name: Liens des pièces du PLU
+        if: inputs.script == 'check_gpu.mjs'
+        timeout-minutes: 3
         continue-on-error: true
         run: cp frontend/tests/check_gpu.mjs . && node check_gpu.mjs
       - name: Sur téléphone
         if: inputs.mobile && !inputs.assistant
         run: cp frontend/tests/e2e_mobile.mjs . && node e2e_mobile.mjs
       - name: Diagnostic
-        if: inputs.script != ''
+        if: inputs.script != '' && inputs.script != 'check_gpu.mjs'
+        timeout-minutes: 15
         run: cp frontend/tests/${{ inputs.script }} . && node ${{ inputs.script }}
       - name: Assistant
         if: inputs.assistant
@@ -81,6 +84,7 @@ jobs:
           MOBILE: ${{ inputs.mobile && '1' || '' }}
         run: cp frontend/tests/e2e_assistant.mjs . && node e2e_assistant.mjs
       - name: Prospection sur le site publié
+        timeout-minutes: 12
         if: ${{ !inputs.mobile && !inputs.assistant && inputs.script == '' }}
         env:
           MODE: ${{ inputs.mode }}
