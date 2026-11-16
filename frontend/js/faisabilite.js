@@ -120,3 +120,103 @@ export function bilan(v, empriseDessin) {
   const nivSsol = reste ? Math.ceil(reste / Math.max(1, maxParNiv)) : 0;
   return { Sc, empMax, c, empCalc, emp, pct, brute, sdp, shab, lgt, sociaux, places, surfBox, placesSurf, parNivSsol, maxParNiv, nivSsol };
 }
+
+// ---------- Plan optimisé : barres de logements dans l'enveloppe constructible ----------
+/**
+ * Cherche l'implantation qui donne le plus de logements selon le PLU : une à trois barres rectangulaires
+ * (épaisseur de 10 à 18 m, longueur 10 m au moins), parallèles à la rue ou perpendiculaires, entièrement dans
+ * l'enveloppe constructible (parcelle diminuée du retrait sur les limites et du recul sur la voie), espacées d'au moins
+ * la moitié de leur hauteur (8 m minimum), sans dépasser l'emprise au sol ni la pleine terre autorisées.
+ * @returns { batiments: [Feature], emprise, profondeur, orientation, nb } ou null
+ */
+export function optimiser(f, fac, { ret = 0, recul = 0, ces = 100, pt = 0, S, h = 9, inc = 0 }) {
+  // enveloppe : retrait sur les limites, puis recul côté rue
+  let env = f;
+  try { if (ret > 0) env = turf.buffer(f, -ret, { units: 'meters' }) || null; } catch { env = f; }
+  if (!env) return null;
+  if (recul > ret && fac) {
+    try {
+      const bande = turf.buffer(turf.lineString([fac.p1.geometry ? fac.p1.geometry.coordinates : fac.p1, fac.p2.geometry ? fac.p2.geometry.coordinates : fac.p2]), recul, { units: 'meters' });
+      const d = turf.difference(turf.featureCollection([env, bande]));
+      if (d) env = d;
+    } catch { /* bande de recul non calculable */ }
+  }
+  const Sx = S || turf.area(f);
+  const cap = Math.max(0, Math.min(((Sx - inc) * ces) / 100, Sx * (1 - pt / 100)));
+  if (cap < 60) return null;
+  // repère local en mètres
+  const c0 = turf.centroid(f).geometry.coordinates, kx = 111320 * Math.cos((c0[1] * Math.PI) / 180), ky = 110540;
+  const loc = ([x, y]) => [(x - c0[0]) * kx, (y - c0[1]) * ky];
+  const geo = ([x, y]) => [x / kx + c0[0], y / ky + c0[1]];
+  const polys = env.geometry.type === 'Polygon' ? [env.geometry.coordinates] : env.geometry.coordinates;
+  const anneaux = polys.flatMap((p) => p.map((r) => r.map(loc)));
+  const capRue = fac ? fac.cap : 0;
+  const angles = [capRue, capRue + 90];
+  const gap = Math.max(8, h / 2);
+  let best = null;
+  for (const capA of angles) {
+    const a = ((90 - capA) * Math.PI) / 180; // direction de la barre (cap géographique -> angle mathématique)
+    const ca = Math.cos(-a), sa = Math.sin(-a);
+    const rot = anneaux.map((r) => r.map(([x, y]) => [x * ca - y * sa, x * sa + y * ca]));
+    let ymin = Infinity, ymax = -Infinity;
+    rot.forEach((r) => r.forEach(([, y]) => { ymin = Math.min(ymin, y); ymax = Math.max(ymax, y); }));
+    // intervalles couverts par l'enveloppe sur une horizontale
+    const couvre = (y) => {
+      const xs = [];
+      for (const r of rot) for (let i = 0; i < r.length - 1; i++) {
+        const [x1, y1] = r[i], [x2, y2] = r[i + 1];
+        if ((y1 <= y && y2 > y) || (y2 <= y && y1 > y)) xs.push(x1 + ((y - y1) * (x2 - x1)) / (y2 - y1));
+      }
+      xs.sort((p, q) => p - q);
+      const out = [];
+      for (let i = 0; i + 1 < xs.length; i += 2) out.push([xs[i], xs[i + 1]]);
+      return out;
+    };
+    const inter = (A, B) => { const o = []; for (const [a1, a2] of A) for (const [b1, b2] of B) { const l = Math.max(a1, b1), r = Math.min(a2, b2); if (r - l > 0) o.push([l, r]); } return o; };
+    for (const d of [10, 12, 14, 16, 18]) {
+      const pas = 0.5, barres = [];
+      for (let y = ymin + 0.05; y + d <= ymax; y += pas) {
+        let I = couvre(y + 0.2);
+        for (const t of [0.25, 0.5, 0.75]) I = inter(I, couvre(y + d * t));
+        I = inter(I, couvre(y + d - 0.2));
+        const g = I.reduce((m, x) => (x[1] - x[0] > m[1] - m[0] ? x : m), [0, 0]);
+        const L = g[1] - g[0];
+        if (L >= 10) barres.push({ y, x1: g[0], x2: g[1], aire: L * d });
+      }
+      if (!barres.length) continue;
+      // jusqu'à 3 barres espacées (programmation dynamique sur la position)
+      const n = barres.length, dp = [barres.map((b) => [Math.min(b.aire, cap), [b]])];
+      for (let k = 1; k < 3; k++) {
+        const prev = dp[k - 1], cur = [];
+        for (let i = 0; i < n; i++) {
+          let m = null;
+          for (let j = 0; j < i; j++) {
+            if (!prev[j] || barres[i].y < barres[j].y + d + gap) continue;
+            const tot = prev[j][1].reduce((s, b) => s + b.aire, 0) + barres[i].aire;
+            if (!m || Math.min(tot, cap) > m[0]) m = [Math.min(tot, cap), [...prev[j][1], barres[i]]];
+          }
+          cur.push(m);
+        }
+        dp.push(cur);
+      }
+      for (const lvl of dp) for (const x of lvl) {
+        if (!x) continue;
+        const tot = x[1].reduce((s, b) => s + b.aire, 0);
+        // à emprise égale : moins de bâtiments, puis plus compact
+        if (!best || x[0] > best.val + 1 || (Math.abs(x[0] - best.val) <= 1 && (x[1].length < best.barres.length || (x[1].length === best.barres.length && tot < best.tot)))) {
+          best = { val: x[0], tot, barres: x[1], d, ca, sa, capA };
+        }
+      }
+    }
+  }
+  if (!best) return null;
+  // barres raccourcies à l'emprise autorisée si besoin
+  const k = best.tot > best.val ? best.val / best.tot : 1;
+  const inv = ([x, y]) => [x * best.ca + y * best.sa, -x * best.sa + y * best.ca];
+  const batiments = best.barres.map((b) => {
+    const L = (b.x2 - b.x1) * k, x1 = b.x1 + ((b.x2 - b.x1) - L) / 2, x2 = x1 + L;
+    const ring = [[x1, b.y], [x2, b.y], [x2, b.y + best.d], [x1, b.y + best.d], [x1, b.y]].map((p) => geo(inv(p)));
+    return turf.polygon([ring], { longueur: Math.round(L), profondeur: best.d });
+  });
+  return { batiments, emprise: batiments.reduce((s, b) => s + turf.area(b), 0), profondeur: best.d, nb: batiments.length, orientation: Math.abs(((best.capA - capRue) % 180)) < 1 ? 'parallèle à la rue' : 'perpendiculaire à la rue', env };
+}
