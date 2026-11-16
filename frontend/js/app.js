@@ -1091,11 +1091,23 @@ async function initFais(token) {
 
 function dessinerFais() {
   const F = sel.fais, v = F.v, hyp = store.settings();
+  const pct = v.niveaux && v.niveaux.length ? v.niveaux : fais.niveauxPct(v.niv);
+  const h = pct.reduce((a, x) => a + x / 100, 0) * hyp.hEt;
+  // plan optimisé : le plus de logements possible dans l'enveloppe du PLU (recalculé quand une règle change)
+  if (v.mode === 'opt') {
+    const cleOpt = [v.b, v.recul, v.ces, v.ptSsol, v.S, v.inc, Math.round(h)].join('|');
+    if (F.optCle !== cleOpt) { F.optCle = cleOpt; F.opt = fais.optimiser(sel.feature, F.fac, { ret: v.b, recul: v.recul, ces: v.ces, pt: v.ptSsol, S: v.S, inc: v.inc, h }); }
+    if (F.opt) {
+      F.es = { bat: null, env: F.opt.env, emprise: F.opt.emprise };
+      map.getSource('bat').setData({ type: 'FeatureCollection', features: F.opt.batiments.map((b) => ({ ...b, properties: { ...b.properties, hauteur: Math.max(3, h) } })) });
+      map.getSource('bati3d').setData({ type: 'FeatureCollection', features: F.autour || [] });
+      map.getSource('env').setData(F.opt.env && (v.b > 0 || v.recul > 0) ? F.opt.env : empty);
+      return F.opt.emprise;
+    }
+  }
   const c = Math.max(0, v.a - 2 * v.b);
   const es = fais.esquisse(sel.feature, F.fac, { c, d: v.d, recul: v.recul, decal: v.decal, avance: v.avance, rot: v.rot, ret: v.b });
   F.es = es;
-  const pct = v.niveaux && v.niveaux.length ? v.niveaux : fais.niveauxPct(v.niv);
-  const h = pct.reduce((a, x) => a + x / 100, 0) * hyp.hEt;
   map.getSource('bat').setData(es.bat ? { type: 'FeatureCollection', features: [{ ...es.bat, properties: { hauteur: Math.max(3, h) } }] } : empty);
   map.getSource('bati3d').setData({ type: 'FeatureCollection', features: F.autour || [] });
   map.getSource('env').setData(es.env && v.b > 0 ? es.env : empty);
@@ -1110,6 +1122,12 @@ function majFais(root) {
   root.querySelectorAll('[data-pct]').forEach((el) => { const i = +el.dataset.pct; el.textContent = `soit ${f0((B.emp * (B.pct[i] || 0)) / 100)} m²`; });
   root.querySelectorAll('[data-rv]').forEach((el) => { el.textContent = `${F.v[el.dataset.rv]}`; });
   const kp = $('#faisKpis', root);
+  const pl = $('#faisPlan', root);
+  if (pl && F.v.mode === 'opt') {
+    const o = F.opt;
+    pl.innerHTML = o ? `<b>Plan optimisé :</b> ${o.nb} bâtiment${o.nb > 1 ? 's' : ''} de ${o.profondeur} m d'épaisseur, ${o.orientation}${o.nb > 1 ? `, espacés d'au moins ${Math.round(Math.max(8, (fais.niveauxPct(F.v.niv).reduce((a, x) => a + x / 100, 0) * store.settings().hEt) / 2))} m` : ''} (${o.batiments.map((b) => `${b.properties.longueur} × ${b.properties.profondeur} m`).join(', ')}), dans l'enveloppe du PLU : retrait ${fmt1(F.v.b)} m sur les limites, recul ${fmt1(F.v.recul)} m sur la voie, emprise au sol ${fmt1(F.v.ces)} % au plus. Changez une règle ci-dessous : le plan se recalcule. Les valeurs marquées <span class="pill ok">PLU</span> viennent du PLU de la commune.`
+      : "<b>Plan optimisé impossible</b> : l'enveloppe constructible est trop petite (retrait et recul). Essayez « Bâtiment unique » ou vérifiez les règles.";
+  }
   if (kp) kp.innerHTML = `<div><span>Emprise</span><strong>${m2(B.emp)}</strong></div><div><span>Surface de plancher</span><strong>${m2(B.sdp)}</strong></div><div><span>Logements</span><strong>${B.lgt}</strong></div><div><span>Places</span><strong>${B.places}</strong></div>`;
   F.B = B;
 }
@@ -1146,7 +1164,8 @@ function renderPot() {
       <div class="actions"><button type="button" id="fais3d">${F.vue3d ? 'Vue 2D' : 'Voir en 3D'}</button><button type="button" class="ghost" id="faisReset">Réinitialiser</button></div></div>
     <div class="kpis" id="faisKpis"></div>
     ${sel.iaLecture && sel.iaLecture.etat === 'cours' ? `<p class="synth-pot"><b>Lecture du règlement de la zone ${esc(sel.zLabel)} par l'IA…</b> Les valeurs se mettront à jour.</p>` : ''}
-    <p class="note">Le bâtiment est dessiné en jaune sur la carte, à partir de la façade ${F.surRue ? 'sur rue' : '(la plus longue, rue non détectée)'} de ${fmt1(F.fac.a)} m. Faites-le glisser sur la carte pour le déplacer, ou modifiez les valeurs ci-dessous : tout se recalcule. Les valeurs marquées <span class="pill ok">PLU</span> viennent du PLU de la commune.</p>
+    <div class="actions"><button type="button" class="${val.mode === 'opt' ? '' : 'ghost'}" data-mode="opt">Plan optimisé</button><button type="button" class="${val.mode === 'opt' ? 'ghost' : ''}" data-mode="libre">Bâtiment unique, déplaçable</button></div>
+    <p class="note" id="faisPlan">${val.mode === 'opt' ? '' : `Le bâtiment est dessiné en jaune sur la carte, à partir de la façade ${F.surRue ? 'sur rue' : '(la plus longue, rue non détectée)'} de ${fmt1(F.fac.a)} m. Faites-le glisser sur la carte pour le déplacer, ou modifiez les valeurs ci-dessous : tout se recalcule.`} Les valeurs marquées <span class="pill ok">PLU</span> viennent du PLU de la commune.</p>
     <div class="tw"><table class="fais-table"><tbody>${LIGNES.map(ligne).join('')}</tbody></table></div>
     <details class="rules-edit"><summary>Calcul réglementaire simplifié et règles de la zone</summary><div id="potSimple"></div></details>
     <p class="note">Esquisse indicative : à confirmer avec le règlement complet (implantation, prospects, stationnement) et un architecte.</p>`;
@@ -1161,6 +1180,7 @@ function renderPot() {
     const l = (F.v.niveaux && F.v.niveaux.length ? F.v.niveaux : fais.niveauxPct(F.v.niv)).slice();
     l[+i.dataset.niv] = parseFloat(i.value) || 0; F.v.niveaux = l; majFais(root);
   }));
+  v.querySelectorAll('[data-mode]').forEach((b) => (b.onclick = () => { F.v.mode = b.dataset.mode; renderPot(); }));
   $('#fais3d', v).onclick = () => { vue3d(!F.vue3d); $('#fais3d', v).textContent = F.vue3d ? 'Vue 2D' : 'Voir en 3D'; };
   $('#faisReset', v).onclick = () => { F.v = { ...F.v0 }; renderPot(); };
   renderPotSimple($('#potSimple', v));
@@ -1169,7 +1189,7 @@ function renderPot() {
 // Glisser l'esquisse sur la carte : le déplacement est converti en décalage latéral et en avancée
 let dragBat = null;
 map.on('mousedown', 'bat-fill', (e) => {
-  if (!sel || !sel.fais || !sel.fais.v) return;
+  if (!sel || !sel.fais || !sel.fais.v || sel.fais.v.mode === 'opt') return;
   e.preventDefault(); map.dragPan.disable();
   dragBat = { start: [e.lngLat.lng, e.lngLat.lat], decal: sel.fais.v.decal, avance: sel.fais.v.avance };
   map.getCanvas().style.cursor = 'grabbing';

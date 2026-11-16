@@ -84,7 +84,7 @@ export function valeursInitiales({ S, regles, hyp, fac, inconstructible = 0 }) {
     niv, niveaux: null, ratioBrut: hyp.k * 100, ratioHab: 95, taille: hyp.sMoy, social: 0, seuilSocial: 0,
     placesLgt: regles.stat !== null && regles.stat !== undefined ? regles.stat : 1, m2Place: 60, placeSurf: 20,
     ptSsol: regles.pt !== null && regles.pt !== undefined ? regles.pt * 100 : 20, placeSsol: 30,
-    recul: regles.recul !== null && regles.recul !== undefined ? regles.recul : 0, decal: 0, avance: 0, rot: 0,
+    recul: regles.recul !== null && regles.recul !== undefined ? regles.recul : 0, decal: 0, avance: 0, rot: 0, mode: 'opt',
   };
 }
 

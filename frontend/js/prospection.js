@@ -11,6 +11,7 @@ import * as permis from './permis.js';
 import { reglesGraphiquesParcelle, fusionRegles } from './regles.js';
 import * as lecture from './lecture.js';
 import * as satellite from './satellite.js';
+import * as faisab from './faisabilite.js';
 import { cleIA } from './assistant.js';
 
 const NATURES_DEFAUT = Object.keys(NATURES).filter((k) => NATURES[k].opp);
@@ -636,10 +637,31 @@ export function initProspection(ctx) {
       const entres = avantEstim - st.results.attente.length;
       if (entres) avertissements.push(`${f0(entres)} terrain(s) sans règles PLU connues ajoutés avec un nombre de logements estimé d'après la densité des opérations collectives autorisées alentour (mention « ≈ »). À confirmer avec le règlement de la zone.`);
       store.addHistorique({ date: st.results.date, commune: com.nom, code: com.code, total: parcels.length, retenus: out.length, top: out.slice(0, 5).map((h) => ({ ref: refOf(h.f.properties), score: h.s.tot, nature: h.occ.label })) });
+      // plan optimisé (barres de logements dans l'enveloppe du PLU) pour les meilleurs terrains : nombre de logements réaliste
+      setStatus('Plans de bâtiments optimisés pour les meilleurs terrains…', 98); await pause();
+      const idxParc = grille(parcels, 0.002);
+      let optEcartes = 0;
+      for (const h of st.results.list.filter((x) => x.pot && x.cat !== 'entrepot').slice(0, 80)) {
+        try {
+          const rg = fusionRegles(store.getRules(h.key), h.graph).regles;
+          const b = turf.bbox(h.f), dd = 0.0002;
+          const vois = idxParc.pres([b[0] - dd, b[1] - dd, b[2] + dd, b[3] + dd]).filter((x) => !String(h.f.properties.idu).includes(x.properties.idu));
+          const fac = faisab.facade(h.f, vois);
+          const o = faisab.optimiser(h.f, fac, { ret: rg.ret || 0, recul: rg.recul || 0, ces: rg.ces !== null && rg.ces !== undefined ? rg.ces * 100 : 100, pt: rg.pt ? rg.pt * 100 : 0, S: h.occ.S, h: h.pot.niv * hyp.hEt });
+          if (!o) continue;
+          h.opt = { lg: Math.floor((o.emprise * h.pot.niv * hyp.k) / hyp.sMoy), nb: o.nb, d: o.profondeur, orientation: o.orientation, emprise: Math.round(o.emprise) };
+          if (c.lmin && h.opt.lg < c.lmin) { h.horsOpt = true; optEcartes++; }
+        } catch { /* géométrie non traitable : potentiel théorique gardé */ }
+      }
+      if (optEcartes) {
+        st.results.list = st.results.list.filter((x) => !x.horsOpt);
+        compte.regles += optEcartes;
+        avertissements.push(`${f0(optEcartes)} terrain(s) retiré(s) : une fois les bâtiments dessinés dans l'enveloppe du PLU, ils n'atteignent pas ${c.lmin} logements.`);
+      }
       st.compteRef = compte;
       if (st.results.attente.length) avertissements.push(`${f0(st.results.attente.length)} terrain(s) mis de côté : règles du PLU inconnues pour leur zone et pas assez d'opérations voisines pour estimer. Renseignez les règles dans « zones sans règles » ci-dessous, ils entreront dans les résultats.`);
       setStatus(resume(st.results));
-      ctx.setHits(out.filter((h) => h.cat !== 'entrepot'));
+      ctx.setHits(st.results.list.filter((h) => h.cat !== 'entrepot'));
       ctx.onResults && ctx.onResults(true);
       renderResults();
       // adresses en arrière-plan : la liste est utilisable tout de suite, les adresses s'ajoutent au fil de l'eau
@@ -780,7 +802,7 @@ export function initProspection(ctx) {
     { k: 'nature', t: 'Nature', v: (h) => h.occ.label },
     { k: 'ces', t: 'Bâti', v: (h) => h.occ.ces, fmt: (x) => `${Math.round(x * 100)} %`, n: true },
     { k: 'niv', t: 'Niv.', v: (h) => (h.pot ? h.pot.niv : -1), fmt: (x) => (x < 0 ? '?' : x <= 1 ? 'RDC' : 'R+' + (x - 1)), n: true },
-    { k: 'lgt', t: 'Logts', v: (h) => (h.zoneAct ? -2 : h.pot ? h.pot.real : h.estim ? h.estim.lg - 0.1 : -1), fmt: (x) => (x === -2 ? '—' : x < 0 ? '?' : Number.isInteger(x) ? x : `≈ ${Math.round(x + 0.1)}`), n: true },
+    { k: 'lgt', t: 'Logts', v: (h) => (h.zoneAct ? -2 : h.opt ? h.opt.lg : h.pot ? h.pot.real : h.estim ? h.estim.lg - 0.1 : -1), fmt: (x) => (x === -2 ? '—' : x < 0 ? '?' : Number.isInteger(x) ? x : `≈ ${Math.round(x + 0.1)}`), n: true },
     { k: 'score', t: 'Note', v: (h) => h.s.tot, n: true },
   ];
 
@@ -850,7 +872,7 @@ export function initProspection(ctx) {
       <div class="why">${h.s.parts.map((p) => `<div class="why-row"><span>${esc(p.label)}</span><span class="bar"><i style="width:${p.v === null ? 0 : Math.round((100 * p.v) / p.max)}%"></i></span><b>${p.v === null ? '—' : p.v}/${p.max}</b><small>${esc(p.why)}</small></div>`).join('')}</div>
       ${h.cat === 'entrepot' ? `<p><span class="pill ${h.zoneAct ? 'no' : 'ok'}">${h.zoneAct ? "zone d'activités" : "zone d'habitat"}</span> ${h.zoneAct ? "Entrepôt ou local d'activité en zone d'activités : le logement y est interdit par le PLU." : 'Entrepôt ou local d\'activité en zone qui autorise le logement : reconversion en logements possible.'}</p>` : ''}
       ${h.groupe ? `<p><span class="pill wa">remembrement</span> ${h.membres.length} parcelles voisines, propriétaires probablement différents : ${h.membres.map((m, j) => `<b>${esc(refOf(m.f.properties))}</b> ${esc(m.occ.label.toLowerCase())}, ${f0(m.S)} m²${h.adresses && h.adresses[j] ? ', ' + esc(h.adresses[j].label) : ''}`).join(' · ')}</p>` : ''}
-      <p class="note">${esc(h.occ.raisons.join(' ; '))}${h.occ.flags.length ? ' · ' + h.occ.flags.map((x) => esc(x.t)).join(' · ') : ''}${h.facade !== undefined ? ` · façade sur rue ${f0(h.facade)} m` : ''}${h.oap ? ' · en secteur d\'OAP' : ''}${h.aConfirmer ? (h.estim ? ` · <b>≈ ${h.estim.lg} logements estimés</b> (densité médiane de ${h.estim.dens} logts/ha sur ${h.estim.n} opérations collectives autorisées, ${esc(h.estim.base)}) : à confirmer avec le règlement` : ' · potentiel à confirmer (règles de zone manquantes)') : ''}${h.graph ? ' · plan graphique : ' + Object.values(h.graph.sources).map(esc).join(', ') : ''}</p>
+      <p class="note">${esc(h.occ.raisons.join(' ; '))}${h.occ.flags.length ? ' · ' + h.occ.flags.map((x) => esc(x.t)).join(' · ') : ''}${h.facade !== undefined ? ` · façade sur rue ${f0(h.facade)} m` : ''}${h.opt ? ` · <b>plan optimisé : ${h.opt.nb} bâtiment(s) de ${h.opt.d} m d'épaisseur, ${esc(h.opt.orientation)}, ${f0(h.opt.emprise)} m² d'emprise, ${h.opt.lg} logements</b> (à voir dans l'onglet Faisabilité)` : ''}${h.oap ? ' · en secteur d\'OAP' : ''}${h.aConfirmer ? (h.estim ? ` · <b>≈ ${h.estim.lg} logements estimés</b> (densité médiane de ${h.estim.dens} logts/ha sur ${h.estim.n} opérations collectives autorisées, ${esc(h.estim.base)}) : à confirmer avec le règlement` : ' · potentiel à confirmer (règles de zone manquantes)') : ''}${h.graph ? ' · plan graphique : ' + Object.values(h.graph.sources).map(esc).join(', ') : ''}</p>
       <div class="actions"><button type="button" data-fiche="${i}">Ouvrir la fiche</button><button type="button" class="ghost" data-carte="${i}">Voir sur la carte</button></div></td></tr>` : '';
     return `<tr data-i="${i}" class="${open ? 'open' : ''}">${cells}</tr>${detail}`;
   }
@@ -909,7 +931,7 @@ export function initProspection(ctx) {
     liste = liste.slice().sort((a, b) => zl(a).localeCompare(zl(b), 'fr', { numeric: true }) || b.s.tot - a.s.tot);
     liste.forEach((x, i) => {
       const parts = x.groupe ? x.membres.map((m) => m.f.properties) : [x.f.properties];
-      const lg = x.pot ? x.pot.real : x.estim ? x.estim.lg : null;
+      const lg = x.opt ? x.opt.lg : x.pot ? x.pot.real : x.estim ? x.estim.lg : null;
       const fais = lg === null ? `à étudier (${Math.round(x.occ.S).toLocaleString('fr-FR')} m²)` : `${x.pot ? '' : '≈ '}${lg} logements pour environ ${Math.round(x.occ.S).toLocaleString('fr-FR')} m²${x.groupe ? ` (remembrement de ${x.membres.length} parcelles)` : ''}`;
       // propriétaire : seulement s'il a été noté dans le suivi (champ « propriétaire » ou note « Propriétaire : … »)
       // propriétaire : noté dans le suivi en priorité, sinon personne morale connue (fichier public de la DGFiP)
@@ -973,7 +995,8 @@ export function initProspection(ctx) {
       rang, reference: refOf(h.f.properties), adresse: h.adresse || null, zone: h.zone.properties.libelle,
       surface_m2: Math.round(h.occ.S), nature: h.occ.label, remembrement_parcelles: h.groupe ? h.membres.length : 1,
       facade_rue_m: h.facade ?? null, niveaux: h.pot ? h.pot.niv : null,
-      logements: h.pot ? h.pot.real : h.estim ? h.estim.lg : null,
+      logements: h.opt ? h.opt.lg : h.pot ? h.pot.real : h.estim ? h.estim.lg : null,
+      plan: h.opt ? `${h.opt.nb} bâtiment(s) de ${h.opt.d} m d'épaisseur, ${h.opt.orientation}, ${h.opt.emprise} m² d'emprise` : null,
       logements_source: h.pot ? 'règles du PLU' : h.estim ? `estimation d'après ${h.estim.n} opérations voisines (${h.estim.base})` : 'inconnu',
       note: h.s.tot, note_partielle: !!h.s.partiel, oap: !!h.oap, contraintes: (h.contraintes || []).map((x) => x.t),
     };
